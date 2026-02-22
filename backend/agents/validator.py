@@ -31,6 +31,11 @@ from backend.agents.snapshot import snapshot_agent, compute_static_metrics, esti
 from backend.core.sandbox import run_tests, run_function_with_inputs, benchmark_function
 from backend.core.conversation import ConversationContext
 
+try:
+    from scipy.stats import ttest_ind
+except ImportError:
+    ttest_ind = None
+
 
 # ─────────────────────────────────────────────
 # Test execution
@@ -124,6 +129,58 @@ def _compare_metric(name: str, before: float, after: float, higher_is_better: bo
         improved=improved,
         delta_percent=delta_pct,
     )
+
+
+# ─────────────────────────────────────────────
+# Welch's t-test for benchmark significance
+# ─────────────────────────────────────────────
+
+def _run_significance_test(
+    before_benchmarks: list,
+    after_benchmarks: list,
+) -> tuple[Optional[float], Optional[bool], list[dict]]:
+    """
+    Run per-size Welch's t-test on raw timing arrays.
+
+    Returns:
+        (worst_p_value, all_significant, per_size_results)
+        where per_size_results is [{size, p_value, significant, before_n, after_n}, ...]
+    """
+    if ttest_ind is None:
+        return None, None, []
+
+    per_size = []
+    for bb, ab in zip(before_benchmarks, after_benchmarks):
+        before_times = bb.raw_times if hasattr(bb, 'raw_times') else []
+        after_times = ab.raw_times if hasattr(ab, 'raw_times') else []
+
+        if len(before_times) < 3 or len(after_times) < 3:
+            per_size.append({
+                "size": bb.input_size,
+                "p_value": None,
+                "significant": None,
+                "before_n": len(before_times),
+                "after_n": len(after_times),
+            })
+            continue
+
+        t_stat, p_value = ttest_ind(before_times, after_times, equal_var=False)
+        p_val = float(p_value)
+        per_size.append({
+            "size": bb.input_size,
+            "p_value": round(p_val, 6),
+            "significant": p_val < 0.05,
+            "before_n": len(before_times),
+            "after_n": len(after_times),
+        })
+
+    valid = [r for r in per_size if r["p_value"] is not None]
+    if not valid:
+        return None, None, per_size
+
+    worst_p = max(r["p_value"] for r in valid)
+    all_sig = all(r["significant"] for r in valid)
+    return worst_p, all_sig, per_size
 
 
 # ─────────────────────────────────────────────
@@ -321,7 +378,7 @@ def validator_agent(
         sizes = [b.input_size for b in before_snapshot.benchmarks]
         raw = benchmark_function(
             optimized.optimized_source, fname, gen_code,
-            sizes=sizes, runs_per_size=5, timeout=30.0,
+            sizes=sizes, runs_per_size=10, timeout=30.0,
         )
         for b in raw:
             if isinstance(b, dict) and b.get("mean_time", -1) > 0:
@@ -330,9 +387,25 @@ def validator_agent(
                     mean_time=b["mean_time"],
                     std_time=b.get("std_time", 0.0),
                     memory_bytes=b.get("memory_bytes", 0),
+                    raw_times=b.get("raw_times", []),
                 ))
         if after_benchmarks:
             _, after_big_o_slope = estimate_big_o(after_benchmarks)
+
+    # -- Step 5b: Welch's t-test on raw timing data --
+    p_value = None
+    significant = None
+    p_values_per_size = []
+
+    if before_snapshot.benchmarks and after_benchmarks:
+        _log(f"Running Welch's t-test on timing data...")
+        p_value, significant, p_values_per_size = _run_significance_test(
+            before_snapshot.benchmarks, after_benchmarks,
+        )
+        if p_value is not None:
+            _log(f"T-test: p={p_value:.6f}, significant={significant}")
+        else:
+            _log(f"T-test: insufficient raw timing data")
 
     # -- Step 6: Run existing test suite (if available) --
     existing_results = None
@@ -379,6 +452,9 @@ def validator_agent(
         after_snapshot=after_snapshot,
         test_results=all_tests,
         round_number=round_num,
+        p_value=p_value,
+        significant=significant,
+        p_values_per_size=p_values_per_size,
     )
 
     # -- Write to conversation context if available --
@@ -391,6 +467,9 @@ def validator_agent(
                  "improved": m.improved, "delta_percent": m.delta_percent}
                 for m in improvements
             ],
+            "p_value": p_value,
+            "significant": significant,
+            "p_values_per_size": p_values_per_size,
         }
 
         if verdict == Verdict.APPROVED:
@@ -439,6 +518,9 @@ def validator_agent(
                 "improved_metrics": improved_metrics,
                 "tests_passed": all_tests.passed,
                 "tests_failed": all_tests.failed,
+                "p_value": p_value,
+                "significant": significant,
+                "p_values_per_size": p_values_per_size,
             }
         )
 

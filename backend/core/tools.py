@@ -40,10 +40,6 @@ try:
 except ImportError:
     np = None
 
-try:
-    from scipy import stats as scipy_stats
-except ImportError:
-    scipy_stats = None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -156,7 +152,7 @@ ESTIMATE_BIG_O_TOOL = {
     "description": (
         "Estimate Big O complexity from benchmark timing data using log-log linear regression. "
         "Fits log(time) = slope × log(n) + intercept. Slope ≈1 means O(n), ≈2 means O(n²), etc. "
-        "Also runs Welch's t-test to confirm the slope is statistically significant (p < 0.05)."
+        "Reports R² as a confidence metric for the fit quality."
     ),
     "input_schema": {
         "type": "object",
@@ -620,24 +616,14 @@ def handle_estimate_big_o(sizes: list, times: list, **kwargs) -> dict:
 
     big_o = _slope_to_big_o(slope)
 
-    # Statistical significance via Welch's t-test if available
-    p_value = None
-    if scipy_stats and len(valid) >= 3:
-        try:
-            early_times = [t for s, t in valid[:len(valid)//2]]
-            late_times = [t for s, t in valid[len(valid)//2:]]
-            if early_times and late_times:
-                stat, p_value = scipy_stats.ttest_ind(early_times, late_times, equal_var=False)
-                p_value = float(p_value)
-        except Exception:
-            pass
+    # Confidence based on R² of the log-log fit
+    confidence = "high" if r_squared > 0.95 else "medium" if r_squared > 0.8 else "low"
 
     return {
         "big_o": big_o,
         "slope": round(slope, 3),
         "r_squared": round(r_squared, 4) if r_squared else None,
-        "p_value": round(p_value, 6) if p_value is not None else None,
-        "statistically_significant": p_value < 0.05 if p_value is not None else None,
+        "confidence": confidence,
     }
 
 

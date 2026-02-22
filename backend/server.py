@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 FastAPI Server — AGENTIC Pipeline Orchestrator.
 
@@ -95,6 +98,7 @@ class OptimizeRequest(BaseModel):
     skip_benchmarks: bool = False
     enable_thinking: bool = True    # Extended thinking for Analyst/Optimizer
     enable_planner: bool = True     # Strategic planning with Haiku
+    demo_mode: bool = False         # Fast mode for live demos (~90s instead of ~270s)
 
 
 class OptimizeResponse(BaseModel):
@@ -108,6 +112,46 @@ class HealthResponse(BaseModel):
     features: list[str]
 
 
+class PipelineConfig:
+    """Configuration that flows through the entire pipeline."""
+
+    def __init__(
+        self,
+        demo_mode: bool = False,
+        max_functions: int = None,
+        skip_benchmarks: bool = False,
+        enable_thinking: bool = True,
+        enable_planner: bool = True,
+    ):
+        self.demo_mode = demo_mode
+        self._max_functions = max_functions
+        self.skip_benchmarks = skip_benchmarks or demo_mode  # demo_mode skips benchmarks
+        self.enable_thinking = enable_thinking
+        self.enable_planner = enable_planner
+
+    @property
+    def analyst_max_tools(self) -> int:
+        return 4 if self.demo_mode else 10
+
+    @property
+    def test_designer_max_tests(self) -> int:
+        return 5 if self.demo_mode else 25
+
+    @property
+    def optimizer_max_validations(self) -> int:
+        return 3 if self.demo_mode else 10
+
+    @property
+    def benchmark_sizes(self) -> list:
+        return [10, 100, 1000] if self.demo_mode else [10, 50, 100, 500, 1000, 5000]
+
+    @property
+    def effective_max_functions(self) -> int:
+        if self._max_functions:
+            return self._max_functions
+        return 2 if self.demo_mode else MAX_FUNCTIONS
+
+
 # ═══════════════════════════════════════════════════════════
 # Per-function optimization with ConversationContext
 # ═══════════════════════════════════════════════════════════
@@ -118,6 +162,7 @@ async def run_optimization_for_function(
     emitter: EventEmitter,
     skip_benchmarks: bool = False,
     enable_thinking: bool = True,
+    config: PipelineConfig = None,
 ) -> tuple[PipelineResult, ConversationContext]:
     """
     The core multi-round conversation loop for a single function.
@@ -146,7 +191,7 @@ async def run_optimization_for_function(
         # -- ANALYST: form hypothesis (Round 1) or diagnose rejection (Round 2+) --
         if round_num == 1:
             hypothesis = await asyncio.to_thread(
-                analyst_agent, snapshot, emitter, enable_thinking, ctx
+                analyst_agent, snapshot, emitter, enable_thinking, ctx, config
             )
         else:
             hypothesis = await asyncio.to_thread(
@@ -157,7 +202,7 @@ async def run_optimization_for_function(
         # -- OPTIMIZER: implement hypothesis with self-validation --
         optimized = await asyncio.to_thread(
             optimizer_agent, snapshot, hypothesis,
-            emitter, enable_thinking, ctx
+            emitter, enable_thinking, ctx, config
         )
 
         if optimized is None:
@@ -172,7 +217,7 @@ async def run_optimization_for_function(
         # -- TEST DESIGNER: generate diff-aware tests --
         test_suite = await asyncio.to_thread(
             test_designer_agent, snapshot, optimized,
-            emitter, enable_thinking, ctx
+            emitter, enable_thinking, ctx, config
         )
 
         # -- VALIDATOR: deterministic pass/fail --
@@ -238,6 +283,7 @@ async def run_pipeline(
     skip_benchmarks: bool = False,
     enable_thinking: bool = True,
     enable_planner: bool = True,
+    demo_mode: bool = False,
 ):
     """
     Full agentic pipeline with:
@@ -248,6 +294,14 @@ async def run_pipeline(
     - Multi-round feedback loop
     - Real-time SSE streaming
     """
+    config = PipelineConfig(
+        demo_mode=demo_mode,
+        max_functions=max_functions,
+        skip_benchmarks=skip_benchmarks,
+        enable_thinking=enable_thinking,
+        enable_planner=enable_planner,
+    )
+
     emitter = EventEmitter()
     queue = event_queues.get(run_id)
 
@@ -263,7 +317,7 @@ async def run_pipeline(
         # ═══════════════════════════════════════
         emitter.complete(
             EventType.PIPELINE_START, "orchestrator",
-            f"Starting agentic pipeline for {repo_path}",
+            f"Starting agentic pipeline for {repo_path}" + (" [DEMO MODE]" if demo_mode else ""),
             data={
                 "features": {
                     "tool_use": True,
@@ -273,6 +327,7 @@ async def run_pipeline(
                     "strategic_planning": enable_planner,
                     "conversation_context": True,
                     "agent_handoffs": True,
+                    "demo_mode": demo_mode,
                 }
             }
         )
@@ -360,10 +415,11 @@ async def run_pipeline(
         # STEP 2: PLANNER (Haiku — fast + strategic)
         # ═══════════════════════════════════════
         plan = None
+        effective_max = config.effective_max_functions
         if enable_planner and len(targets) > 1:
             emitter.log("planner", "Strategic planning with Claude Haiku...")
             plan = await asyncio.to_thread(
-                planner_agent, targets, max_functions, emitter
+                planner_agent, targets, effective_max, emitter
             )
             targets = reorder_targets(targets, plan)
             emitter.complete(
@@ -372,7 +428,7 @@ async def run_pipeline(
                 data={"model": "haiku"}
             )
 
-        targets_to_process = targets[:max_functions]
+        targets_to_process = targets[:effective_max]
 
         # ═══════════════════════════════════════
         # STEP 3-7: Process each function (AGENTIC with ConversationContext)
@@ -417,7 +473,7 @@ async def run_pipeline(
 
                 # -- SNAPSHOT (deterministic) --
                 snapshot = await asyncio.to_thread(
-                    snapshot_agent, target, emitter, skip_benchmarks
+                    snapshot_agent, target, emitter, config.skip_benchmarks
                 )
                 ctx.snapshot_metrics = {
                     "cyclomatic_complexity": snapshot.static_metrics.cyclomatic_complexity,
@@ -431,8 +487,9 @@ async def run_pipeline(
                     ctx=ctx,
                     snapshot=snapshot,
                     emitter=emitter,
-                    skip_benchmarks=skip_benchmarks,
+                    skip_benchmarks=config.skip_benchmarks,
                     enable_thinking=enable_thinking,
+                    config=config,
                 )
 
                 if func_result.status == "approved":
@@ -569,6 +626,7 @@ async def start_optimization(
         skip_benchmarks=request.skip_benchmarks,
         enable_thinking=request.enable_thinking,
         enable_planner=request.enable_planner,
+        demo_mode=request.demo_mode,
     )
 
     return OptimizeResponse(run_id=run_id, message="Agentic pipeline started")

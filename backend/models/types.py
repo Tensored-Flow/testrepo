@@ -57,6 +57,7 @@ class BenchmarkPoint:
     mean_time: float        # seconds
     std_time: float         # seconds
     memory_bytes: int = 0
+    raw_times: list[float] = field(default_factory=list)  # individual run times (seconds)
 
 
 @dataclass
@@ -161,6 +162,9 @@ class ValidationResult:
     after_snapshot: Optional[BehavioralSnapshot] = None
     test_results: Optional[TestResults] = None
     round_number: int = 1
+    p_value: Optional[float] = None         # Welch's t-test p-value (worst across sizes)
+    significant: Optional[bool] = None      # p < 0.05 at all input sizes
+    p_values_per_size: list[dict] = field(default_factory=list)  # [{size, p_value, significant}]
 
 
 # ─────────────────────────────────────────────

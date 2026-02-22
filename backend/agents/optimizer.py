@@ -237,6 +237,7 @@ def optimizer_agent(
     emitter: Optional[EventEmitter] = None,
     enable_thinking: bool = True,
     ctx: Optional[ConversationContext] = None,
+    config=None,
 ) -> Optional[OptimizedCode]:
     """
     SELF-VALIDATING code generation.
@@ -250,18 +251,28 @@ def optimizer_agent(
         emitter: Event emitter for SSE streaming
         enable_thinking: Enable extended thinking
         ctx: Optional ConversationContext for multi-agent communication
+        config: Optional PipelineConfig for demo_mode adjustments
     """
     fname = snapshot.function_name
     round_num = hypothesis.round_number
+    demo_mode = config.demo_mode if config else False
     _log = lambda msg: emitter.log("optimizer", msg, function_name=fname, round_number=round_num) if emitter else None
 
-    _log(f"Optimizer generating code for {fname}()...")
+    _log(f"Optimizer generating code for {fname}()..." + (" [DEMO]" if demo_mode else ""))
     _log(f"Strategy: {hypothesis.strategy}")
 
     # Build system prompt with conversation context
     system_prompt = OPTIMIZER_SYSTEM
     if ctx and ctx.messages:
         system_prompt += f"\n\n=== CONVERSATION HISTORY ===\n{ctx.to_agent_briefing('optimizer')}"
+
+    # Demo mode: add efficiency instructions
+    if demo_mode:
+        system_prompt += (
+            "\n\nIMPORTANT — DEMO MODE: Be efficient. "
+            "Self-validate with at most 3 test inputs. "
+            "Call compile_check once, compare_outputs once with a small set of inputs, then submit."
+        )
 
     user_msg = _build_optimizer_message(snapshot, hypothesis, ctx)
     executor = _make_optimizer_tool_executor(emitter, fname, round_num)
@@ -273,6 +284,8 @@ def optimizer_agent(
                        function_name=fname, round_number=round_num,
                        data={"type": "thinking"})
 
+    max_turns = config.optimizer_max_validations if config else 12
+
     # THE SELF-VALIDATING LOOP
     result = call_claude_with_tools(
         system_prompt=system_prompt,
@@ -281,7 +294,7 @@ def optimizer_agent(
         tool_executor=executor,
         enable_thinking=enable_thinking,
         on_thinking=on_thinking,
-        max_turns=12,
+        max_turns=max_turns,
     )
 
     # Parse the optimized code from Claude's response

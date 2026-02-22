@@ -244,7 +244,7 @@ def _summarize_tool_result(tool_name: str, result_str: str) -> str:
             return f"n={s}: {t*1000:.2f}ms"
         return f"{len(benchmarks)} sizes benchmarked"
     elif tool_name == "estimate_big_o":
-        return f"{data.get('big_o', '?')} (slope={data.get('slope', '?')}, p={data.get('p_value', '?')})"
+        return f"{data.get('big_o', '?')} (slope={data.get('slope', '?')}, R²={data.get('r_squared', '?')}, confidence={data.get('confidence', '?')})"
     elif tool_name == "run_function_with_inputs":
         n = data.get("total_tests", "?")
         return f"{n} inputs tested"
@@ -279,6 +279,7 @@ def analyst_agent(
     emitter: Optional[EventEmitter] = None,
     enable_thinking: bool = True,
     ctx: Optional[ConversationContext] = None,
+    config=None,
 ) -> AnalysisHypothesis:
     """
     Round 1: AGENTIC analysis with tool use.
@@ -291,11 +292,13 @@ def analyst_agent(
         emitter: Event emitter for SSE streaming
         enable_thinking: Enable extended thinking
         ctx: Optional ConversationContext for multi-agent communication
+        config: Optional PipelineConfig for demo_mode adjustments
     """
     fname = snapshot.function_name
+    demo_mode = config.demo_mode if config else False
     _log = lambda msg: emitter.log("analyst", msg, function_name=fname) if emitter else None
 
-    _log(f"Analyst investigating {fname}() -- autonomous tool use enabled")
+    _log(f"Analyst investigating {fname}() -- autonomous tool use enabled" + (" [DEMO]" if demo_mode else ""))
 
     # Build the user message with the source code
     user_msg = (
@@ -311,6 +314,14 @@ def analyst_agent(
     # Build round-aware system prompt
     system_prompt = build_analyst_system_prompt(ctx)
 
+    # Demo mode: add conciseness instructions
+    if demo_mode:
+        system_prompt += (
+            "\n\nIMPORTANT — DEMO MODE: Be concise and efficient. "
+            "Call at most 4 tools (run_lizard, run_radon, benchmark_function, estimate_big_o). "
+            "Form your hypothesis quickly based on pattern recognition and minimal measurements."
+        )
+
     # Create event-emitting tool executor
     executor = _make_event_tool_executor(emitter, fname, round_num=1)
 
@@ -321,6 +332,8 @@ def analyst_agent(
             emitter.log("analyst", f"[thinking] {preview}",
                        function_name=fname, data={"type": "thinking"})
 
+    max_turns = config.analyst_max_tools if config else 10
+
     # THE AGENTIC CALL — Claude decides which tools to use
     result = call_claude_with_tools(
         system_prompt=system_prompt,
@@ -329,7 +342,7 @@ def analyst_agent(
         tool_executor=executor,
         enable_thinking=enable_thinking,
         on_thinking=on_thinking,
-        max_turns=10,
+        max_turns=max_turns,
     )
 
     # Parse the hypothesis from Claude's final response

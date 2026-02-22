@@ -342,7 +342,7 @@ def snapshot_agent(
         raw_benchmarks = benchmark_function(
             target.source_code, fname, gen_code,
             sizes=[100, 500, 1000, 2000],
-            runs_per_size=3,
+            runs_per_size=10,
             timeout=30.0,
         )
 
@@ -353,6 +353,7 @@ def snapshot_agent(
                     mean_time=b["mean_time"],
                     std_time=b.get("std_time", 0.0),
                     memory_bytes=b.get("memory_bytes", 0),
+                    raw_times=b.get("raw_times", []),
                 ))
 
         big_o, big_o_slope = estimate_big_o(benchmarks)

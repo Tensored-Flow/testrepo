@@ -207,7 +207,7 @@ def compute_cognitive_complexity(source_code: str) -> int:
 # FUNCTION 3: benchmark_function
 # ════════════════════════════════════════════════════════════
 
-def benchmark_function(func, input_sizes=None, input_generator=None, iterations=3):
+def benchmark_function(func, input_sizes=None, input_generator=None, iterations=10):
     """Empirically benchmark a callable at multiple input sizes."""
     if input_sizes is None:
         input_sizes = [100, 500, 1000, 5000, 10000]
@@ -222,31 +222,37 @@ def benchmark_function(func, input_sizes=None, input_generator=None, iterations=
 
     for size in input_sizes:
         input_data = input_generator(size)
-        times = []
-        memories = []
         timed_out = False
 
+        # Warmup run (untimed, primes caches)
+        try:
+            func(copy.deepcopy(input_data))
+        except Exception:
+            pass
+
+        # Loop 1: Timing only (no tracemalloc overhead)
+        times = []
         for _ in range(iterations):
             input_copy = copy.deepcopy(input_data)
-
-            tracemalloc.start()
             start = time.perf_counter()
             func(input_copy)
             elapsed_ms = (time.perf_counter() - start) * 1000
-            _, peak_bytes = tracemalloc.get_traced_memory()
-            tracemalloc.stop()
-
             times.append(elapsed_ms)
-            memories.append(peak_bytes)
 
             if elapsed_ms > 10_000:  # 10-second timeout
                 timed_out = True
                 break
 
+        # Loop 2: Memory measurement (separate, not timed)
+        tracemalloc.start()
+        func(copy.deepcopy(input_data))
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
         results.append({
             "input_size": size,
             "time_ms": round(min(times), 3),
-            "memory_mb": round(max(memories) / 1024 / 1024, 3),
+            "memory_mb": round(max(peak_bytes, 0) / 1024 / 1024, 3),
         })
 
         if timed_out:

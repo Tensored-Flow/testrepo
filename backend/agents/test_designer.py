@@ -106,6 +106,7 @@ def test_designer_agent(
     emitter: Optional[EventEmitter] = None,
     enable_thinking: bool = True,
     ctx: Optional[ConversationContext] = None,
+    config=None,
 ) -> TestSuite:
     """
     Generate AND validate tests using tool use.
@@ -116,17 +117,27 @@ def test_designer_agent(
         emitter: Event emitter for SSE streaming
         enable_thinking: Enable extended thinking
         ctx: Optional ConversationContext for multi-agent communication
+        config: Optional PipelineConfig for demo_mode adjustments
     """
     fname = snapshot.function_name
     round_num = optimized.round_number
+    demo_mode = config.demo_mode if config else False
     _log = lambda msg: emitter.log("test_designer", msg, function_name=fname, round_number=round_num) if emitter else None
 
-    _log(f"Designing tests for {fname}() optimization...")
+    _log(f"Designing tests for {fname}() optimization..." + (" [DEMO]" if demo_mode else ""))
 
     # Build system prompt with conversation context
     system_prompt = TEST_DESIGNER_SYSTEM
     if ctx and ctx.messages:
         system_prompt += f"\n\n=== CONVERSATION HISTORY ===\n{ctx.to_agent_briefing('test_designer')}"
+
+    # Demo mode: limit test count for speed
+    if demo_mode:
+        system_prompt += (
+            "\n\nIMPORTANT — DEMO MODE: Generate exactly 5 tests: "
+            "3 differential tests and 2 edge case tests. No more. "
+            "Be concise and validate quickly."
+        )
 
     user_msg = (
         f"## Generate and validate tests for: {fname}()\n\n"
@@ -155,6 +166,8 @@ def test_designer_agent(
                        function_name=fname, round_number=round_num,
                        data={"type": "thinking"})
 
+    max_turns = 4 if demo_mode else 8
+
     result = call_claude_with_tools(
         system_prompt=system_prompt,
         user_message=user_msg,
@@ -162,7 +175,7 @@ def test_designer_agent(
         tool_executor=executor,
         enable_thinking=enable_thinking,
         on_thinking=on_thinking,
-        max_turns=8,
+        max_turns=max_turns,
     )
 
     # Parse the test suite from response
