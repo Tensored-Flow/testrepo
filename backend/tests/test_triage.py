@@ -2,7 +2,7 @@
 
 Owner: ___
 Status: NOT STARTED
-Depends on: agents/triage.py, demo-repos/flask-data-toolkit/
+Depends on: agents/triage.py, demo-repos/data-toolkit/
 """
 
 import pytest
@@ -13,12 +13,12 @@ import pytest
 
 class TestTriageAgent:
     # TODO: test scans demo repo and finds all functions
-    # TODO: test classifies sort.py functions as Category A
-    # TODO: test classifies handlers.py functions as Category B
-    # TODO: test classifies train.py functions as Category B
-    # TODO: test skips __init__.py trivial functions
+    # TODO: test classifies transforms.py functions as Category A
+    # TODO: test classifies io_handlers.py functions as Category B
+    # TODO: test classifies api_client.py functions as Category B
+    # TODO: test skips config.py trivial functions
     # TODO: test detects pytest as test framework
-    # TODO: test finds test_sort.py for sort.py functions
+    # TODO: test finds test_transforms.py for transforms.py functions
     # TODO: test sorts Category A by CC descending
     pass
 
