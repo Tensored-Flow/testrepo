@@ -1,2 +1,0 @@
-# No external dependencies -- pure Python
-# (This is intentional for the demo -- no pip install needed)
