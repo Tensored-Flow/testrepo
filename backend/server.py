@@ -118,13 +118,13 @@ class PipelineConfig:
     def __init__(
         self,
         demo_mode: bool = False,
-        max_functions: int = None,
+        max_functions: Optional[int] = None,
         skip_benchmarks: bool = False,
         enable_thinking: bool = True,
         enable_planner: bool = True,
     ):
         self.demo_mode = demo_mode
-        self._max_functions = max_functions
+        self._max_functions_explicit = max_functions  # None means "use defaults"
         self.skip_benchmarks = skip_benchmarks or demo_mode  # demo_mode skips benchmarks
         self.enable_thinking = enable_thinking
         self.enable_planner = enable_planner
@@ -139,7 +139,7 @@ class PipelineConfig:
 
     @property
     def optimizer_max_validations(self) -> int:
-        return 3 if self.demo_mode else 10
+        return 5 if self.demo_mode else 12
 
     @property
     def benchmark_sizes(self) -> list:
@@ -147,9 +147,27 @@ class PipelineConfig:
 
     @property
     def effective_max_functions(self) -> int:
-        if self._max_functions:
-            return self._max_functions
+        if self._max_functions_explicit is not None:
+            return self._max_functions_explicit
         return 2 if self.demo_mode else MAX_FUNCTIONS
+
+    @staticmethod
+    def from_request(
+        demo_mode: bool = False,
+        max_functions: int = MAX_FUNCTIONS,
+        skip_benchmarks: bool = False,
+        enable_thinking: bool = True,
+        enable_planner: bool = True,
+    ) -> "PipelineConfig":
+        """Create config, treating default max_functions as 'not explicitly set'."""
+        explicit_max = None if max_functions == MAX_FUNCTIONS else max_functions
+        return PipelineConfig(
+            demo_mode=demo_mode,
+            max_functions=explicit_max,
+            skip_benchmarks=skip_benchmarks,
+            enable_thinking=enable_thinking,
+            enable_planner=enable_planner,
+        )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -294,7 +312,7 @@ async def run_pipeline(
     - Multi-round feedback loop
     - Real-time SSE streaming
     """
-    config = PipelineConfig(
+    config = PipelineConfig.from_request(
         demo_mode=demo_mode,
         max_functions=max_functions,
         skip_benchmarks=skip_benchmarks,
